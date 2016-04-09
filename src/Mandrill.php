@@ -17,6 +17,9 @@ require_once 'Mandrill/Senders.php';
 require_once 'Mandrill/Metadata.php';
 require_once 'Mandrill/Exceptions.php';
 
+use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
+
 class Mandrill {
     
     public $apikey;
@@ -62,14 +65,15 @@ class Mandrill {
         if(!$apikey) throw new Mandrill_Error('You must provide a Mandrill API key');
         $this->apikey = $apikey;
 
-        $this->ch = curl_init();
-        curl_setopt($this->ch, CURLOPT_USERAGENT, 'Mandrill-PHP/1.0.55');
-        curl_setopt($this->ch, CURLOPT_POST, true);
-        curl_setopt($this->ch, CURLOPT_FOLLOWLOCATION, true);
-        curl_setopt($this->ch, CURLOPT_HEADER, false);
-        curl_setopt($this->ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($this->ch, CURLOPT_CONNECTTIMEOUT, 30);
-        curl_setopt($this->ch, CURLOPT_TIMEOUT, 600);
+        $this->ch = new Client([
+            'headers'         => [
+                'Content-Type' => 'application/json',
+                'Accept'       => 'application/json',
+                'User-Agent'   => 'Mandrill-PHP/1.0.55',
+            ],
+            'connect_timeout' => 30,
+            'timeout'         => 600,
+        ]);
 
         $this->root = rtrim($this->root, '/') . '/';
 
@@ -97,42 +101,29 @@ class Mandrill {
     public function call($url, $params) {
         $params['key'] = $this->apikey;
         $params = json_encode($params);
-        $ch = $this->ch;
+        $ch     = $this->ch;
+        $result = '';
 
-        curl_setopt($ch, CURLOPT_URL, $this->root . $url . '.json');
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/json'));
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $params);
-        curl_setopt($ch, CURLOPT_VERBOSE, $this->debug);
+        try {
+            $start = microtime(true);
+            $this->log('Call to ' . $this->root . $url . '.json: ' . json_encode($params));
+            $response_body = $ch->post($this->root . $url . '.json', [
+                'json'  => $params,
+                'debug' => $this->debug,
+            ])->getBody()->getContents();
 
-        $start = microtime(true);
-        $this->log('Call to ' . $this->root . $url . '.json: ' . $params);
-        if($this->debug) {
-            $curl_buffer = fopen('php://memory', 'w+');
-            curl_setopt($ch, CURLOPT_STDERR, $curl_buffer);
+            $time = microtime(true) - $start;
+
+            $this->log('Completed in ' . number_format($time * 1000, 2) . 'ms');
+            $this->log('Got response: ' . $response_body);
+
+            $result = json_decode($response_body, true);
+            return $result;
+        } catch (ConnectException $e) {
+            throw new Mandrill_Error('We were unable to decode the JSON response from the Mandrill API: ' . $response_body);
+        } catch (Exception $e) {
+            $this->castError($result);
         }
-
-        $response_body = curl_exec($ch);
-        $info = curl_getinfo($ch);
-        $time = microtime(true) - $start;
-        if($this->debug) {
-            rewind($curl_buffer);
-            $this->log(stream_get_contents($curl_buffer));
-            fclose($curl_buffer);
-        }
-        $this->log('Completed in ' . number_format($time * 1000, 2) . 'ms');
-        $this->log('Got response: ' . $response_body);
-
-        if(curl_error($ch)) {
-            throw new Mandrill_HttpError("API call to $url failed: " . curl_error($ch));
-        }
-        $result = json_decode($response_body, true);
-        if($result === null) throw new Mandrill_Error('We were unable to decode the JSON response from the Mandrill API: ' . $response_body);
-        
-        if(floor($info['http_code'] / 100) >= 4) {
-            throw $this->castError($result);
-        }
-
-        return $result;
     }
 
     public function readConfigs() {
