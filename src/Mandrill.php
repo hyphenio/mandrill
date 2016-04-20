@@ -105,11 +105,6 @@ class Mandrill
         $this->metadata    = new Mandrill_Metadata($this);
     }
 
-    public function __destruct()
-    {
-        curl_close($this->ch);
-    }
-
     public function call($url, $params)
     {
         $params['key'] = $this->apikey;
